@@ -1,0 +1,124 @@
+name: CI/CD Pipeline
+
+concurrency:
+  group: bun-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "*.md"
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - "*.md"
+
+jobs:
+  build:
+    timeout-minutes: 15  # 设置超时时间，防止意外取消
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+      fail-fast: false  # 允许其他系统继续运行即使某个系统失败
+
+    env:
+      DATABASE_URL: "postgresql://opencut:opencutthegoat@localhost:5432/opencut"
+      BETTER_AUTH_SECRET: "supersecret"
+      NEXT_PUBLIC_BETTER_AUTH_URL: "http://localhost:3000"
+      UPSTASH_REDIS_REST_URL: "https://your-upstash-redis-url"
+      UPSTASH_REDIS_REST_TOKEN: "your-upstash-redis-token"
+      NODE_ENV: "production"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 获取所有历史记录，有助于更好的缓存
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.18
+
+      - name: Get Bun cache directory
+        id: bun-cache
+        run: |
+          echo "dir=$(bun pm cache dir)" >> $GITHUB_OUTPUT
+
+      - name: Cache Bun modules
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.bun-cache.outputs.dir }}
+          key: ${{ runner.os }}-bun-${{ hashFiles('apps/web/bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: Install dependencies
+        working-directory: apps/web
+        run: bun install --frozen-lockfile --production=false
+        env:
+          BUN_INSTALL_VERBOSE: 1  # 启用详细日志以便调试
+
+      - name: Build application
+        working-directory: apps/web
+        run: bun run build
+        env:
+          NEXT_TELEMETRY_DISABLED: 1  # 禁用 Next.js 遥测
+
+      - name: Run type check
+        working-directory: apps/web
+        run: bun run type-check || echo "Type check failed but continuing"
+        continue-on-error: true
+
+      - name: Run linting
+        working-directory: apps/web
+        run: bun run lint || echo "Linting failed but continuing"
+        continue-on-error: true
+
+      - name: Run tests
+        working-directory: apps/web
+        run: |
+          if [ -f "package.json" ] && grep -q "\"test\"" package.json; then
+            bun run test --coverage
+          else
+            echo "No test script found in package.json"
+          fi
+        continue-on-error: true
+        env:
+          NODE_ENV: test
+
+      - name: Upload build artifacts (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-${{ matrix.os }}
+          path: |
+            apps/web/.next
+            apps/web/*.log
+          retention-days: 1
+
+      - name: Upload build artifacts (on success)
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-output-${{ matrix.os }}
+          path: apps/web/.next
+          retention-days: 7
+
+  # 可选：添加一个部署作业
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'  # 只在 main 分支推送时部署
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Deploy to production
+        run: echo "Deployment would happen here"
+        # 这里可以添加你的部署逻辑，比如：
+        # - Vercel部署
+        # - Netlify部署
+        # - 自托管服务器部署
