@@ -16,12 +16,12 @@ on:
 
 jobs:
   build:
-    timeout-minutes: 15  # 设置超时时间，防止意外取消
+    timeout-minutes: 15
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-      fail-fast: false  # 允许其他系统继续运行即使某个系统失败
+      fail-fast: false
 
     env:
       DATABASE_URL: "postgresql://opencut:opencutthegoat@localhost:5432/opencut"
@@ -35,22 +35,30 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # 获取所有历史记录，有助于更好的缓存
+          fetch-depth: 0
 
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.2.18
 
-      - name: Get Bun cache directory
-        id: bun-cache
+      - name: Get Bun cache directory (Linux/macOS)
+        if: matrix.os != 'windows-latest'
+        id: bun-cache-unix
         run: |
           echo "dir=$(bun pm cache dir)" >> $GITHUB_OUTPUT
+
+      - name: Get Bun cache directory (Windows)
+        if: matrix.os == 'windows-latest'
+        id: bun-cache-windows
+        run: |
+          echo "dir=$(bun pm cache dir | Out-File -Encoding utf8 -FilePath $env:GITHUB_OUTPUT -Append)"
 
       - name: Cache Bun modules
         uses: actions/cache@v4
         with:
-          path: ${{ steps.bun-cache.outputs.dir }}
+          # 根据操作系统选择正确的缓存路径
+          path: ${{ matrix.os == 'windows-latest' ? steps.bun-cache-windows.outputs.dir : steps.bun-cache-unix.outputs.dir }}
           key: ${{ runner.os }}-bun-${{ hashFiles('apps/web/bun.lock') }}
           restore-keys: |
             ${{ runner.os }}-bun-
@@ -59,13 +67,13 @@ jobs:
         working-directory: apps/web
         run: bun install --frozen-lockfile --production=false
         env:
-          BUN_INSTALL_VERBOSE: 1  # 启用详细日志以便调试
+          BUN_INSTALL_VERBOSE: 1
 
       - name: Build application
         working-directory: apps/web
         run: bun run build
         env:
-          NEXT_TELEMETRY_DISABLED: 1  # 禁用 Next.js 遥测
+          NEXT_TELEMETRY_DISABLED: 1
 
       - name: Run type check
         working-directory: apps/web
@@ -107,18 +115,13 @@ jobs:
           path: apps/web/.next
           retention-days: 7
 
-  # 可选：添加一个部署作业
   deploy:
     needs: build
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'  # 只在 main 分支推送时部署
+    if: github.ref == 'refs/heads/main'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Deploy to production
         run: echo "Deployment would happen here"
-        # 这里可以添加你的部署逻辑，比如：
-        # - Vercel部署
-        # - Netlify部署
-        # - 自托管服务器部署
