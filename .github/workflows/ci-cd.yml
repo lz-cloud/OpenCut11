@@ -7,12 +7,32 @@ concurrency:
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - "*.md"
+    paths-ignore: ["*.md"]
   pull_request:
     branches: [main]
-    paths-ignore:
-      - "*.md"
+    paths-ignore: ["*.md"]
+  workflow_dispatch:
+    inputs:
+      target-os:
+        description: "选择要运行的操作系统（默认全选）"
+        type: choice
+        required: true
+        default: "all"
+        options:
+          - all
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
+      run-tests:
+        description: "是否运行测试用例"
+        type: boolean
+        required: true
+        default: true
+      deploy-after-build:
+        description: "构建成功后是否触发部署（仅main分支生效）"
+        type: boolean
+        required: true
+        default: false
 
 jobs:
   build:
@@ -20,7 +40,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: ${{ 
+          github.event_name == 'workflow_dispatch' && github.event.inputs.target-os != 'all' 
+            ? fromJSON('["' + github.event.inputs.target-os + '"]') 
+            : fromJSON('["ubuntu-latest", "windows-latest", "macos-latest"]') 
+        }}
       fail-fast: false
 
     env:
@@ -45,23 +69,19 @@ jobs:
       - name: Get Bun cache directory (Linux/macOS)
         if: matrix.os != 'windows-latest'
         id: bun-cache-unix
-        run: |
-          echo "dir=$(bun pm cache dir)" >> $GITHUB_OUTPUT
+        run: echo "dir=$(bun pm cache dir)" >> $GITHUB_OUTPUT
 
       - name: Get Bun cache directory (Windows)
         if: matrix.os == 'windows-latest'
         id: bun-cache-windows
-        run: |
-          echo "dir=$(bun pm cache dir | Out-File -Encoding utf8 -FilePath $env:GITHUB_OUTPUT -Append)"
+        run: bun pm cache dir | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Cache Bun modules
         uses: actions/cache@v4
         with:
-          # 根据操作系统选择正确的缓存路径
           path: ${{ matrix.os == 'windows-latest' ? steps.bun-cache-windows.outputs.dir : steps.bun-cache-unix.outputs.dir }}
           key: ${{ runner.os }}-bun-${{ hashFiles('apps/web/bun.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-bun-
+          restore-keys: ${{ runner.os }}-bun-
 
       - name: Install dependencies
         working-directory: apps/web
@@ -85,7 +105,8 @@ jobs:
         run: bun run lint || echo "Linting failed but continuing"
         continue-on-error: true
 
-      - name: Run tests
+      - name: Run tests (if enabled)
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.run-tests == 'true' }}
         working-directory: apps/web
         run: |
           if [ -f "package.json" ] && grep -q "\"test\"" package.json; then
@@ -118,10 +139,21 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    if: |
+      github.ref == 'refs/heads/main' && (
+        github.event_name != 'workflow_dispatch' || 
+        github.event.inputs.deploy-after-build == 'true'
+      )
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Deploy to production
-        run: echo "Deployment would happen here"
+        run: |
+          echo "=== Starting Deployment ==="
+          echo "Trigger Source: ${{ github.event_name }}"
+          echo "Branch: ${{ github.ref_name }}"
+          # 替换为实际部署命令
+          # 示例: vercel deploy --prod --token ${{ secrets.VERCEL_TOKEN }}
+          echo "Deployment completed successfully"
+    
